@@ -12,11 +12,13 @@ jobs:
 
     services:
       postgres:
-        image: postgres:14-alpine
+        image: postgres:17
         env:
-          POSTGRES_USER: ${{ secrets.PG_USER_TEST }}
-          POSTGRES_PASSWORD: ${{ secrets.PG_PASSWORD_TEST }}
-          POSTGRES_DB: ${{ secrets.PG_DB_TEST }}
+          POSTGRES_USER: bytebattle
+          POSTGRES_PASSWORD: bytebattle
+          POSTGRES_DB: bytebattle
+        ports:
+          - 5432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -30,32 +32,45 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.16'
+          go-version: '1.23'
+          cache: true
 
-      #Сборка приложухи
+      - name: Install tools
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@latest
+          go install github.com/jstemmer/go-junit-report@latest
+
+      - name: Run migrations
+        run: goose -dir schema postgres "postgres://bytebattle:bytebattle@localhost:5432/bytebattle?sslmode=disable" up
+
       - name: Build the application
         run: go build -v ./...
 
-      #Запуск тестов
-      - name: Run tests
+      - name: Run tests and generate output
         env:
           PG_HOST: localhost
           PG_PORT: 5432
-          PG_USER: ${{ secrets.PG_USER_TEST }}
-          PG_PASSWORD: ${{ secrets.PG_PASSWORD_TEST }}
-          PG_DBNAME: ${{ secrets.PG_DB_TEST }}
-        run: go test -v ./...
+          PG_USER: bytebattle
+          PG_PASSWORD: bytebattle
+          PG_DBNAME: bytebattle
+        run: |
+          go test -v -json ./... 2>&1 | tee test_output.json || true
 
-      #Генерация отчета
-      - name: Generate test report
+      - name: Generate XML report
         if: always()
         run: |
-          go install github.com/jstemmer/go-junit-report@latest
-          go test -v -json ./... | go-junit-report > report.xml
+          cat test_output.json | go-junit-report > report.xml
 
-      - name: Upload test report as Artifact
+      - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: go-test-report
           path: report.xml
+
+      - name: Check test status
+        run: |
+          if grep -q '"action":"fail"' test_output.json; then
+            echo "Tests failed!"
+            exit 1
+          fi
